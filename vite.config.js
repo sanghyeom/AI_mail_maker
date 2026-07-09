@@ -5,7 +5,7 @@ import { babelTransformPlugin } from './vite-plugins/babel-transform-plugin.js';
 import { visualEditPlugin } from './vite-plugins/visual-edit-plugin.js';
 import { errorOverlayPlugin } from './vite-plugins/error-overlay-plugin.js'
 import { postMessageInject } from "./vite-plugins/postmessage-inject.js";
-import { handleLlmGenerateRequest, isLlmGeneratePath } from './server/llm-api.js';
+import { handleLlmGenerateRequest, isLlmGeneratePath } from './api/llm/generate.js';
 
 function llmApiPlugin() {
   return {
@@ -29,7 +29,6 @@ export default defineConfig(({ mode }) => {
   const enableVibexTools = env.VITE_ENABLE_VIBEX_TOOLS === 'true';
 
   return {
-    base: '/AI_mail_maker/',
     plugins: [
       react(),
       llmApiPlugin(),
