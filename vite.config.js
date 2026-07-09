@@ -29,6 +29,7 @@ export default defineConfig(({ mode }) => {
   const enableVibexTools = env.VITE_ENABLE_VIBEX_TOOLS === 'true';
 
   return {
+    base: '/AI_mail_maker/',
     plugins: [
       react(),
       llmApiPlugin(),
