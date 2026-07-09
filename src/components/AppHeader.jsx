@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { Award, BookOpen, User, Check, Info, X } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { Award, BookOpen, User, Check, Info, Eye, EyeOff, KeyRound } from 'lucide-react';
 import {
   Dialog,
   DialogContent,
@@ -8,7 +8,9 @@ import {
   DialogDescription,
   DialogTrigger,
 } from '@/components/ui/dialog';
-const LOGO = 'https://cdn.vibe-x.app/apps/a3eed396f1f046203f4ff758/assets/original/logo-0-77009.png';
+import LOGO from '@/assets/logo-header.png';
+import { AI_PROVIDERS, useMailStore } from '@/store/useMailStore';
+
 const GUIDE_STEPS = [
   { title: '메일 정보 입력', desc: '고객명, 업무 유형, 첨부파일명, 추가 요청사항, 톤을 입력합니다.' },
   { title: 'AI 메일 생성', desc: '버튼을 누르면 보안 검수를 거친 뒤 제목과 본문이 자동으로 작성됩니다.' },
@@ -17,6 +19,58 @@ const GUIDE_STEPS = [
 ];
 export default function AppHeader() {
   const [guideOpen, setGuideOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [showApiKey, setShowApiKey] = useState(false);
+  const { aiProvider, apiKey, aiModel, update } = useMailStore();
+  const [draftProvider, setDraftProvider] = useState(aiProvider);
+  const [draftApiKey, setDraftApiKey] = useState(apiKey);
+  const [draftModel, setDraftModel] = useState(aiModel);
+  const selectedProvider =
+    AI_PROVIDERS.find((provider) => provider.value === draftProvider) || AI_PROVIDERS[0];
+
+  const changeProvider = (providerValue) => {
+    const provider = AI_PROVIDERS.find((item) => item.value === providerValue) || AI_PROVIDERS[0];
+
+    setDraftProvider(provider.value);
+    setDraftModel(provider.defaultModel);
+  };
+
+  const syncDraftSettings = () => {
+    const provider = AI_PROVIDERS.find((item) => item.value === aiProvider) || AI_PROVIDERS[0];
+
+    setDraftProvider(aiProvider);
+    setDraftApiKey(apiKey);
+    setDraftModel(aiModel || provider.defaultModel);
+    setShowApiKey(false);
+  };
+
+  const handleSettingsOpenChange = (open) => {
+    if (open) {
+      syncDraftSettings();
+    }
+
+    setSettingsOpen(open);
+  };
+
+  const saveSettings = () => {
+    update({
+      aiProvider: draftProvider,
+      apiKey: draftApiKey,
+      aiModel: draftModel || selectedProvider.defaultModel,
+    });
+    setSettingsOpen(false);
+  };
+
+  useEffect(() => {
+    if (settingsOpen) {
+      const provider =
+        AI_PROVIDERS.find((item) => item.value === draftProvider) || AI_PROVIDERS[0];
+      if (!provider.models.some((model) => model.value === draftModel)) {
+        setDraftModel(provider.defaultModel);
+      }
+    }
+  }, [draftProvider, draftModel, settingsOpen]);
+
   return (
     <header className="bg-[#0F1E3D] text-white sticky top-0 z-40 border-b border-white/10">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
@@ -80,13 +134,129 @@ export default function AppHeader() {
               </div>
             </DialogContent>
           </Dialog>
-          <button
-            type="button"
-            aria-label="프로필"
-            className="w-9 h-9 rounded-full bg-white/10 flex items-center justify-center hover:bg-white/20 transition"
-          >
-            <User className="w-5 h-5" />
-          </button>
+          <Dialog open={settingsOpen} onOpenChange={handleSettingsOpenChange}>
+            <DialogTrigger asChild>
+              <button
+                type="button"
+                aria-label="프로필"
+                className="w-9 h-9 rounded-full bg-white/10 flex items-center justify-center hover:bg-white/20 transition"
+              >
+                <User className="w-5 h-5" />
+              </button>
+            </DialogTrigger>
+            <DialogContent className="max-w-lg">
+              <DialogHeader>
+                <DialogTitle className="text-[#1A2332] flex items-center gap-2">
+                  <KeyRound className="w-5 h-5 text-[#2563EB]" />
+                  AI 연결 설정
+                </DialogTitle>
+                <DialogDescription className="text-[#8A94A6]">
+                  사용할 AI 제공자를 선택하고 본인의 API 키를 입력하세요.
+                </DialogDescription>
+              </DialogHeader>
+
+              <div className="space-y-5 mt-2">
+                <div>
+                  <label className="block text-sm font-semibold text-[#1A2332] mb-2">
+                    AI 제공자
+                  </label>
+                  <div className="grid grid-cols-2 gap-2">
+                    {AI_PROVIDERS.map((provider) => {
+                      const active = draftProvider === provider.value;
+
+                      return (
+                        <button
+                          key={provider.value}
+                          type="button"
+                          onClick={() => changeProvider(provider.value)}
+                          className={`rounded-lg border px-3 py-2.5 text-sm font-semibold transition ${
+                            active
+                              ? 'border-[#2563EB] bg-[#EFF6FF] text-[#2563EB]'
+                              : 'border-[#E5E8EE] bg-white text-[#1A2332] hover:border-[#BFDBFE]'
+                          }`}
+                        >
+                          {provider.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-semibold text-[#1A2332] mb-1.5">
+                    API 키
+                  </label>
+                  <div className="relative">
+                    <input
+                      type={showApiKey ? 'text' : 'password'}
+                      value={draftApiKey}
+                      onChange={(e) => setDraftApiKey(e.target.value)}
+                      placeholder={selectedProvider.keyPlaceholder}
+                      autoComplete="off"
+                      spellCheck="false"
+                      className="w-full pr-11 px-4 py-3 rounded-lg border border-[#E5E8EE] text-[#1A2332] placeholder:text-[#B0B7C3] focus:border-[#2563EB] focus:ring-2 focus:ring-[#2563EB]/20 outline-none transition"
+                    />
+                    <button
+                      type="button"
+                      aria-label={showApiKey ? 'API 키 숨기기' : 'API 키 보기'}
+                      onClick={() => setShowApiKey((value) => !value)}
+                      className="absolute right-2 top-1/2 -translate-y-1/2 w-8 h-8 rounded-md flex items-center justify-center text-[#8A94A6] hover:bg-[#F1F5F9] hover:text-[#1A2332] transition"
+                    >
+                      {showApiKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                    </button>
+                  </div>
+                  <p className="text-xs text-[#8A94A6] mt-1.5 leading-relaxed">
+                    API 키는 브라우저 저장소에 저장하지 않고, 생성 요청 시에만 서버로 전달합니다.
+                  </p>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-semibold text-[#1A2332] mb-1.5">
+                    모델 버전
+                  </label>
+                  <select
+                    value={draftModel || selectedProvider.defaultModel}
+                    onChange={(e) => setDraftModel(e.target.value)}
+                    className="w-full px-4 py-3 rounded-lg border border-[#E5E8EE] text-[#1A2332] placeholder:text-[#B0B7C3] focus:border-[#2563EB] focus:ring-2 focus:ring-[#2563EB]/20 outline-none transition"
+                  >
+                    {selectedProvider.models.map((model) => (
+                      <option key={model.value} value={model.value}>
+                        {model.label}
+                      </option>
+                    ))}
+                  </select>
+                  <p className="text-xs text-[#8A94A6] mt-1.5">
+                    기본 설정은 {selectedProvider.defaultModel}입니다.
+                  </p>
+                </div>
+
+                <div className="flex items-start gap-2 p-3 rounded-xl bg-[#EFF6FF] border border-[#BFDBFE]">
+                  <Info className="w-4 h-4 text-[#2563EB] flex-shrink-0 mt-0.5" />
+                  <p className="text-xs text-[#1A2332] leading-relaxed">
+                    OpenAI 또는 Gemini 콘솔에서 발급받은 API 키를 입력해야 합니다. 사용량과 비용은
+                    해당 API 키의 계정에 청구됩니다.
+                  </p>
+                </div>
+
+                <div className="flex items-center justify-end gap-2 pt-1">
+                  <button
+                    type="button"
+                    onClick={() => setSettingsOpen(false)}
+                    className="px-4 py-2.5 rounded-lg border border-[#E5E8EE] bg-white text-sm font-semibold text-[#1A2332] hover:bg-[#F8FAFC] transition"
+                  >
+                    닫기
+                  </button>
+                  <button
+                    type="button"
+                    onClick={saveSettings}
+                    className="px-4 py-2.5 rounded-lg bg-[#2563EB] text-sm font-semibold text-white hover:bg-[#1d4ed8] transition"
+                  >
+                    저장
+                  </button>
+                </div>
+              </div>
+            </DialogContent>
+          </Dialog>
         </div>
       </div>
     </header>

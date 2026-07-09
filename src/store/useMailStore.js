@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { aiflow869, aiflow869ConfigPromise } from '@/lib/aiflow';
+import { generateWithLlm } from '@/api/llm';
 import { GenerationLog } from '@/api/entities';
 export const TASK_TYPES = [
   { value: 'proposal', label: '제안서 송부' },
@@ -14,6 +14,33 @@ export const TONES = [
   { value: 'polite', label: '정중한 톤', desc: '격식을 갖춘 공식 문체' },
   { value: 'friendly', label: '친근한 톤', desc: '부드럽고 다가가기 쉬운 문체' },
   { value: 'concise', label: '간결한 톤', desc: '핵심만 명확하게 전달' },
+];
+export const AI_PROVIDERS = [
+  {
+    value: 'gemini',
+    label: 'Google Gemini',
+    defaultModel: 'gemini-2.5-flash',
+    keyPlaceholder: 'AIza...',
+    models: [
+      { value: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash' },
+      { value: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro' },
+      { value: 'gemini-2.0-flash', label: 'Gemini 2.0 Flash' },
+      { value: 'gemini-1.5-flash', label: 'Gemini 1.5 Flash' },
+      { value: 'gemini-1.5-pro', label: 'Gemini 1.5 Pro' },
+    ],
+  },
+  {
+    value: 'openai',
+    label: 'OpenAI GPT',
+    defaultModel: 'gpt-4o-mini',
+    keyPlaceholder: 'sk-...',
+    models: [
+      { value: 'gpt-4o-mini', label: 'GPT-4o mini' },
+      { value: 'gpt-4o', label: 'GPT-4o' },
+      { value: 'gpt-4.1-mini', label: 'GPT-4.1 mini' },
+      { value: 'gpt-4.1', label: 'GPT-4.1' },
+    ],
+  },
 ];
 // AI 호출 전 클라이언트 사이드 민감정보 차단 패턴
 const SECURITY_PATTERNS = [
@@ -42,6 +69,7 @@ function parseEmail(text) {
 }
 const RESULT_DEFAULTS = {
   securityError: '',
+  errorType: '',
   detectedItems: [],
   securityPassed: false,
   isGenerating: false,
@@ -54,12 +82,60 @@ const RESULT_DEFAULTS = {
   smsLoading: false,
   kakaoLoading: false,
 };
+
+const ENABLE_GENERATION_LOGS = import.meta.env.VITE_ENABLE_GENERATION_LOGS === 'true';
+
+async function recordGenerationLog(payload) {
+  if (!ENABLE_GENERATION_LOGS) return;
+
+  try {
+    await GenerationLog.create(payload);
+  } catch (e) {
+    /* 통계 기록 실패는 사용자 흐름과 분리 */
+  }
+}
+
+function getProviderMeta(provider) {
+  return AI_PROVIDERS.find((item) => item.value === provider) || AI_PROVIDERS[0];
+}
+
+function getModel(state) {
+  return state.aiModel.trim() || getProviderMeta(state.aiProvider).defaultModel;
+}
+
+function getApiKeyMissingMessage(state) {
+  const provider = getProviderMeta(state.aiProvider);
+  return `상단 프로필 버튼을 눌러 ${provider.label} API 키를 입력해주세요.`;
+}
+
+function getLlmErrorType(err) {
+  if (err?.status === 401 || err?.status === 403) return 'auth';
+  if (err?.status === 429) return 'rate';
+  if (err?.status === 402) return 'credits';
+  return 'generation';
+}
+
+function getLlmErrorMessage(err) {
+  if (err?.status === 401 || err?.status === 403) {
+    return 'API 키가 올바르지 않거나 권한이 없습니다. 상단 프로필 버튼에서 API 키를 다시 확인해주세요.';
+  }
+
+  if (err?.status === 429) {
+    return 'AI 제공자의 사용량 한도 또는 요청 제한에 도달했습니다. 잠시 후 다시 시도하거나 결제/쿼터를 확인해주세요.';
+  }
+
+  return err?.message || '메일 생성 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.';
+}
+
 export const useMailStore = create((set, get) => ({
   customerName: '',
   taskType: 'proposal',
   attachmentName: '',
   additionalRequest: '',
   tone: 'polite',
+  aiProvider: 'gemini',
+  apiKey: '',
+  aiModel: 'gemini-2.5-flash',
   ...RESULT_DEFAULTS,
   update: (patch) => set(patch),
   resetResult: () => set(RESULT_DEFAULTS),
@@ -71,6 +147,24 @@ export const useMailStore = create((set, get) => ({
   generate: async () => {
     const state = get();
     if (state.isGenerating) return;
+
+    if (!state.apiKey.trim()) {
+      set({
+        securityError: getApiKeyMissingMessage(state),
+        errorType: 'configuration',
+        detectedItems: [],
+        securityPassed: false,
+        hasGenerated: false,
+        isGenerating: false,
+        isStreaming: false,
+        generatedTitle: '',
+        generatedBody: '',
+        smsText: '',
+        kakaoText: '',
+      });
+      return;
+    }
+
     const combined = [state.customerName, state.attachmentName, state.additionalRequest]
       .filter(Boolean)
       .join(' \n ');
@@ -79,6 +173,7 @@ export const useMailStore = create((set, get) => ({
       set({
         securityError:
           '개인정보 또는 민감정보가 포함되어 있어 메일을 생성할 수 없습니다. 해당 정보를 제거한 후 다시 시도해주세요.',
+        errorType: 'security',
         detectedItems: detected,
         securityPassed: false,
         hasGenerated: false,
@@ -90,20 +185,17 @@ export const useMailStore = create((set, get) => ({
         kakaoText: '',
       });
       // 보안 검수 실패 통계 기록 (개인정보는 저장하지 않음)
-      try {
-        await GenerationLog.create({
-          taskType: state.taskType,
-          tone: state.tone,
-          securityPassed: false,
-          createdAt: new Date().toISOString(),
-        });
-      } catch (e) {
-        /* 로그 실패는 무시 */
-      }
+      await recordGenerationLog({
+        taskType: state.taskType,
+        tone: state.tone,
+        securityPassed: false,
+        createdAt: new Date().toISOString(),
+      });
       return;
     }
     set({
       securityError: '',
+      errorType: '',
       detectedItems: [],
       securityPassed: true,
       isGenerating: true,
@@ -138,97 +230,81 @@ export const useMailStore = create((set, get) => ({
 ===본문===
 (이메일 본문)`;
     try {
-      const config = await aiflow869ConfigPromise;
-      const systemPrompt = config?.systemPrompt || '';
-      const stream = aiflow869.chatStream({
-        system: systemPrompt,
-        messages: [{ role: 'user', content: prompt }],
+      const res = await generateWithLlm({
+        provider: state.aiProvider,
+        apiKey: state.apiKey.trim(),
+        model: getModel(state),
+        prompt,
       });
-      let full = '';
-      for await (const chunk of stream) {
-        if (chunk.delta) {
-          full += chunk.delta;
-          const parsed = parseEmail(full);
-          set({ generatedTitle: parsed.title, generatedBody: parsed.body });
-        }
-        if (chunk.done) break;
-      }
+      const full = res.text || '';
       let { title, body } = parseEmail(full);
       if (!title && !body) {
         body = full.trim();
       }
       set({ generatedTitle: title, generatedBody: body, isGenerating: false, isStreaming: false });
       // 생성 통계 기록 (개인정보·본문 원문은 저장하지 않음)
-      try {
-        await GenerationLog.create({
-          taskType: state.taskType,
-          tone: state.tone,
-          securityPassed: true,
-          createdAt: new Date().toISOString(),
-        });
-      } catch (e) {
-        /* 로그 실패는 무시 */
-      }
+      await recordGenerationLog({
+        taskType: state.taskType,
+        tone: state.tone,
+        securityPassed: true,
+        createdAt: new Date().toISOString(),
+      });
     } catch (err) {
       set({
         isGenerating: false,
         isStreaming: false,
-        securityError:
-          err?.status === 402
-            ? 'AI 크레딧이 모두 소진되었습니다. 관리자에게 문의해주세요.'
-            : '메일 생성 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.',
+        errorType: getLlmErrorType(err),
+        securityError: getLlmErrorMessage(err),
       });
     }
   },
   convertSms: async () => {
-    const { generatedBody, smsLoading } = get();
+    const state = get();
+    const { generatedBody, smsLoading } = state;
     if (!generatedBody || smsLoading) return;
+    if (!state.apiKey.trim()) {
+      set({ smsText: getApiKeyMissingMessage(state) });
+      return;
+    }
+
     set({ smsLoading: true, smsText: '' });
     try {
-      const config = await aiflow869ConfigPromise;
-      const res = await aiflow869.chat({
-        system: config?.systemPrompt || '',
-        messages: [
-          {
-            role: 'user',
-            content: `아래 이메일 본문을 고객에게 보낼 SMS 단문(90자 내외)으로 재구성해줘. 핵심 안내만 간결하고 정중하게 담고, 다른 설명 없이 SMS 문구만 출력해줘.\n\n${generatedBody}`,
-          },
-        ],
+      const res = await generateWithLlm({
+        provider: state.aiProvider,
+        apiKey: state.apiKey.trim(),
+        model: getModel(state),
+        prompt: `아래 이메일 본문을 고객에게 보낼 SMS 단문(90자 내외)으로 재구성해줘. 핵심 안내만 간결하고 정중하게 담고, 다른 설명 없이 SMS 문구만 출력해줘.\n\n${generatedBody}`,
       });
-      set({ smsText: (res.content || '').trim(), smsLoading: false });
+      set({ smsText: (res.text || '').trim(), smsLoading: false });
     } catch (err) {
       set({
         smsLoading: false,
-        smsText:
-          err?.status === 402
-            ? 'AI 크레딧이 소진되었습니다.'
-            : 'SMS 변환 중 오류가 발생했습니다.',
+        smsText: getLlmErrorMessage(err),
       });
     }
   },
   convertKakao: async () => {
-    const { generatedBody, kakaoLoading } = get();
+    const state = get();
+    const { generatedBody, kakaoLoading } = state;
     if (!generatedBody || kakaoLoading) return;
+    if (!state.apiKey.trim()) {
+      set({ kakaoText: getApiKeyMissingMessage(state) });
+      return;
+    }
+
     set({ kakaoLoading: true, kakaoText: '' });
     try {
-      const config = await aiflow869ConfigPromise;
-      const res = await aiflow869.chat({
-        system: config?.systemPrompt || '',
-        messages: [
-          {
-            role: 'user',
-            content: `아래 이메일 본문을 카카오톡 비즈니스 알림톡 형태의 안내 메시지로 재구성해줘. 짧은 인사말과 핵심 안내를 포함하고, 친근하면서도 정중한 문체로. 다른 설명 없이 카카오톡 메시지 문구만 출력해줘.\n\n${generatedBody}`,
-          },
-        ],
+      const res = await generateWithLlm({
+        provider: state.aiProvider,
+        apiKey: state.apiKey.trim(),
+        model: getModel(state),
+        prompt: `아래 이메일 본문을 카카오톡 비즈니스 알림톡 형태의 안내 메시지로 재구성해줘. 짧은 인사말과 핵심 안내를 포함하고, 친근하면서도 정중한 문체로. 다른 설명 없이 카카오톡 메시지 문구만 출력해줘.\n\n${generatedBody}`,
       });
-      set({ kakaoText: (res.content || '').trim(), kakaoLoading: false });
+      set({ kakaoText: (res.text || '').trim(), kakaoLoading: false });
     } catch (err) {
       set({
         kakaoLoading: false,
-        kakaoText:
-          err?.status === 402
-            ? 'AI 크레딧이 소진되었습니다.'
-            : '카카오톡 문구 변환 중 오류가 발생했습니다.',
+        kakaoText: getLlmErrorMessage(err),
       });
     }
   },

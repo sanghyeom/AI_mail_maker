@@ -14,6 +14,7 @@ import { useMailStore } from '@/store/useMailStore';
 export default function ResultPanel() {
   const {
     securityError,
+    errorType,
     detectedItems,
     securityPassed,
     isGenerating,
@@ -51,6 +52,15 @@ export default function ResultPanel() {
   };
   const showResult = hasGenerated && !securityError;
   const streamingIdle = isStreaming && !generatedTitle && !generatedBody;
+  const errorTitles = {
+    configuration: 'AI 설정 필요',
+    auth: 'API 키 확인 필요',
+    rate: 'AI 사용량 제한',
+    credits: 'AI 크레딧 부족',
+    generation: '메일 생성 오류',
+  };
+  const errorTitle = errorTitles[errorType] || '보안 검수 미통과';
+
   return (
     <div className="bg-white rounded-2xl border border-[#E5E8EE] shadow-sm p-6 relative">
       {/* Toast */}
@@ -78,15 +88,15 @@ export default function ResultPanel() {
           않으며, 내용의 정확성은 발신 전 직접 확인해야 합니다.
         </p>
       </div>
-      {/* 보안 검수 결과 */}
+      {/* 오류 및 보안 검수 결과 */}
       {securityError ? (
         <div className="rounded-xl bg-[#FEF2F2] border border-[#FECACA] p-4 mb-4">
           <div className="flex items-start gap-2">
             <AlertCircle className="w-5 h-5 text-[#DC2626] flex-shrink-0 mt-0.5" />
             <div>
-              <p className="text-sm font-semibold text-[#991B1B]">보안 검수 미통과</p>
+              <p className="text-sm font-semibold text-[#991B1B]">{errorTitle}</p>
               <p className="text-sm text-[#B91C1C] mt-1 leading-relaxed">{securityError}</p>
-              {detectedItems.length > 0 && (
+              {errorType === 'security' && detectedItems.length > 0 && (
                 <div className="flex flex-wrap gap-1.5 mt-2.5">
                   {detectedItems.map((item) => (
                     <span

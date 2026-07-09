@@ -5,15 +5,34 @@ import { babelTransformPlugin } from './vite-plugins/babel-transform-plugin.js';
 import { visualEditPlugin } from './vite-plugins/visual-edit-plugin.js';
 import { errorOverlayPlugin } from './vite-plugins/error-overlay-plugin.js'
 import { postMessageInject } from "./vite-plugins/postmessage-inject.js";
+import { handleLlmGenerateRequest, isLlmGeneratePath } from './server/llm-api.js';
+
+function llmApiPlugin() {
+  return {
+    name: 'llm-api',
+    configureServer(server) {
+      server.middlewares.use((req, res, next) => {
+        if (!isLlmGeneratePath(req.url)) {
+          next();
+          return;
+        }
+
+        handleLlmGenerateRequest(req, res);
+      });
+    },
+  };
+}
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '');
   const isProduction = env.VITE_APP_ENV === 'production';
+  const enableVibexTools = env.VITE_ENABLE_VIBEX_TOOLS === 'true';
 
   return {
     plugins: [
       react(),
-      ...(!isProduction
+      llmApiPlugin(),
+      ...(!isProduction && enableVibexTools
         ? [
           babelTransformPlugin(),
           visualEditPlugin(),

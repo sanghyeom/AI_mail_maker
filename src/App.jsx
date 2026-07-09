@@ -23,7 +23,6 @@ import Login from "./pages/admin/Login";
 import ErrorBoundary from "@/components/ui/error-boundary";
 import RouterErrorBoundary from "@/components/ui/router-error-boundary";
 import DefaultHome from "./pages/Home";
-import PoweredByBadge from "@/components/PoweredByBadge";
 
 const { Pages, Layout, mainPage, Admins, adminMainPage, AdminLayout } = pagesConfig;
 
@@ -141,7 +140,6 @@ function App() {
           <RouterProvider router={router} />
           <Toaster />
           <VisualEditAgent />
-          <PoweredByBadge />
         </QueryClientProvider>
       </AuthProvider>
     </ErrorBoundary>
